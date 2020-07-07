@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -8,96 +8,277 @@ using System.Text;
 using System.IO;
 using System.Drawing;
 using System.Threading.Tasks;
+using System.Diagnostics;
+using System.Net;
 using Emgu.TF;
+using Emgu.Models;
 using Emgu.TF.Models;
-#if __ANDROID__
-using Android.App;
-using Android.Content;
-using Android.Runtime;
-using Android.Views;
-using Android.Widget;
-using Android.OS;
-using Android.Graphics;
-using Android.Preferences;
-#elif __UNIFIED__ && !__IOS__
-using AppKit;
-using CoreGraphics;
-#elif __IOS__
-using UIKit;
-using CoreGraphics;
-#endif
+using Tensorflow;
 
 namespace Emgu.TF.XamarinForms
 {
-    public class InceptionPage : ButtonTextImagePage
+    public class InceptionPage
+#if __ANDROID__
+        : AndroidCameraPage
+#else
+        : ButtonTextImagePage
+#endif
     {
-        public InceptionPage()
-           : base()
+        /// <summary>
+        /// The inception model to use.
+        /// </summary>
+        public enum Model
         {
+            /// <summary>
+            /// The default inception model
+            /// </summary>
+            Default,
+            /// <summary>
+            /// The flower re-train model
+            /// </summary>
+            Flower
+        }
 
-            var button = this.GetButton();
-            button.Text = "Perform Image Recognition";
-            button.Clicked += OnButtonClicked;
+        private Model _model;
 
-            OnImagesLoaded += async (sender, image) =>
+        private Inception _inceptionGraph;
+
+        private async Task Init(DownloadProgressChangedEventHandler onProgressChanged)
+        {
+            if (_inceptionGraph == null)
             {
-                SetMessage("Please wait...");
-                SetImage();
+                SessionOptions so = new SessionOptions();
+                if (TfInvoke.IsGoogleCudaEnabled)
+                {
+                    Tensorflow.ConfigProto config = new Tensorflow.ConfigProto();
+                    config.GpuOptions = new Tensorflow.GPUOptions();
+                    config.GpuOptions.AllowGrowth = true;
+                    so.SetConfig(config.ToProtobuf());
+                }
+                _inceptionGraph = new Inception(null, so);
+                _inceptionGraph.OnDownloadProgressChanged += onProgressChanged;
 
-                Task<Tuple<string, string, long>> t = new Task<Tuple<string, string, long>>(
-                    () =>
+                if (_model == Model.Flower)
+                {
+                    //use a retrained model to recognize followers
+                    await _inceptionGraph.Init(
+                        new string[] { "optimized_graph.pb", "output_labels.txt" },
+                        "https://github.com/emgucv/models/raw/master/inception_flower_retrain/",
+                        "Placeholder",
+                        "final_result");
+                }
+                else
+                {
+                    //The original inception model
+                    await _inceptionGraph.Init();
+                }
+                //await _inceptionGraph.Init();
+            }
+        }
+
+        private bool _coldSession = true;
+
+        /*
+        public override String GetButtonName(ButtonMode mode)
+        {
+            switch (mode)
+            {
+                case ButtonMode.WaitingModelDownload:
+                    return "Download Model";
+                default:
+                    return "Recognize object";
+            }
+        }*/
+
+        private String _defaultButtonText = "Recognize object";
+
+#if __ANDROID__
+        private String _StopCameraButtonText = "Stop Camera";
+        private bool _isBusy = false;
+#endif
+
+        public InceptionPage(Model model)
+            : base()
+        {
+#if __ANDROID__
+            //HasCameraOption = true;
+            HasCameraOption = false;
+#endif
+
+            Title = model == Model.Flower ? "Flower Recognition" : "Object recognition (Inception)";
+            _model = model;
+
+            this.TopButton.Text = _defaultButtonText;
+
+            this.TopButton.Clicked += async (sender, e) =>
+            {
+#if !DEBUG
+                try
+#endif
+                {
+                    this.TopButton.IsEnabled = false;
+                    SetImage();
+
+                    SetMessage("Please wait while we download / initialize the model ...");
+                    await Init(this.onDownloadProgressChanged);
+                    SetMessage("Model Loaded.");
+                    String[] images;
+                    if (_model == Model.Flower)
                     {
-                        try
-                        {
-                            SetMessage("Please wait while we download the Inception Model from internet.");
-                            Inception inceptionGraph = new Inception();
-                            SetMessage("Please wait...");
+                        images = await LoadImages(new string[] {"tulips.jpg"});
+                    }
+                    else
+                    {
+                        images = await LoadImages(new string[] {"space_shuttle.jpg"});
+                    }
 
-                            Tensor imageTensor = Emgu.TF.Models.ImageIO.ReadTensorFromImageFile(image[0], 224, 224, 128.0f, 1.0f / 128.0f);
-                            //MultiboxGraph.Result detectResult = graph.Detect(imageTensor);
-                            float[] probability = inceptionGraph.Recognize(imageTensor);
-                            String resStr = String.Empty;
-                            if (probability != null)
+                    if (images == null)
+                    {
+                        //User canceled
+                        this.TopButton.IsEnabled = true;
+                        return;
+                    }
+
+                    if (images[0] == "Camera")
+                    {
+                        //TODO: handle camera stream
+#if __ANDROID__
+                        this.TopButton.Text = _StopCameraButtonText;
+                        StartCapture(async delegate (Object sender, Android.Graphics.Bitmap m)
+                        {
+                            //Skip the frame if busy, 
+                            //Otherwise too many frames arriving and will eventually saturated the memory.
+                            if (!_isBusy)
                             {
-                                String[] labels = inceptionGraph.Labels;
-                                float maxVal = 0;
-                                int maxIdx = 0;
-                                for (int i = 0; i < probability.Length; i++)
+                                _isBusy = true;
+                                try
                                 {
-                                    if (probability[i] > maxVal)
-                                    {
-                                        maxVal = probability[i];
-                                        maxIdx = i;
-                                    }
+                                    Stopwatch watch = Stopwatch.StartNew();
+                                    Inception.RecognitionResult result;
+                                    //await Task.Run(() =>
+                                    //{
+                                        Tensor imageTensor;
+
+                                        if (_model == Model.Flower)
+                                        {
+                                            imageTensor = new Tensor(DataType.Float, new int[] {1, 299, 299, 3} );
+                                            Emgu.Models.NativeImageIO.ReadBitmapToTensor<float>(m, imageTensor.DataPointer, 299, 299, 0.0f,
+                                                1.0f / 255.0f, false, false);
+
+                                        }
+                                        else
+                                        {
+                                            imageTensor = new Tensor(DataType.Float, new int[] { 1, 224, 224, 3 });
+                                            Emgu.Models.NativeImageIO.ReadBitmapToTensor<float>(m, imageTensor.DataPointer, 224, 224, 128.0f, 
+                                                    1.0f);
+                                        }
+                                        result = _inceptionGraph.Recognize(imageTensor)[0];
+                                    //});
+                                    watch.Stop();
+                                    SetImage(m);
+                                    String msg = String.Format("Object is {0} with {1}% probability. Recognized in {2} milliseconds.",
+                                        result.Label, result.Probability * 100, watch.ElapsedMilliseconds);
+                                    SetMessage(msg);
                                 }
-                                resStr = String.Format("Object is {0} with {1}% probability.", labels[maxIdx], maxVal * 100);
+                                finally
+                                {
+                                    _isBusy = false;
+                                    
+                                }
                             }
-                            return new Tuple<string, string, long>(image[0], resStr, 0);
-
-                            //SetImage(t.Result.Item1);
-                            //GetLabel().Text = String.Format("Detected {0} in {1} milliseconds.", t.Result.Item2, t.Result.Item3);
-                        }
-                        catch (Exception e)
+                        });
+#else
+                        throw new NotImplementedException("Camera handling is not implemented");
+#endif
+                    }
+                    else
+                    {
+                        Tensor imageTensor;
+                        if (_model == Model.Flower)
                         {
-                            String msg = e.Message.Replace(System.Environment.NewLine, " ");
-                            SetMessage(msg);
-                            return new Tuple<string, string, long>(null, msg, 0);
+                            imageTensor = Emgu.TF.Models.ImageIO.ReadTensorFromImageFile<float>(images[0], 299, 299, 0.0f,
+                                1.0f / 255.0f, false, false);
                         }
-                    });
-                t.Start();
+                        else
+                        {
+                            imageTensor =
+                                Emgu.TF.Models.ImageIO.ReadTensorFromImageFile<float>(images[0], 224, 224, 128.0f, 1.0f);
+                        }
 
-#if !(__UNIFIED__)
-                var result = await t;
-                SetImage(t.Result.Item1);
-                GetLabel().Text = t.Result.Item2;
+                        Inception.RecognitionResult result;
+                        if (_coldSession)
+                        {
+                            //First run of the recognition graph, here we will compile the graph and initialize the session
+                            //This is expected to take much longer time than consecutive runs.
+                            result = _inceptionGraph.Recognize(imageTensor)[0];
+                            _coldSession = false;
+                        }
+
+                        //Here we are trying to time the execution of the graph after it is loaded
+                        //If we are not interest in the performance, we can skip the following 3 lines
+                        Stopwatch sw = Stopwatch.StartNew();
+                        result = _inceptionGraph.Recognize(imageTensor)[0];
+                        sw.Stop();
+
+                        String msg = String.Format("Object is {0} with {1}% probability. Recognized in {2} milliseconds.",
+                            result.Label, result.Probability * 100, sw.ElapsedMilliseconds);
+                        SetMessage(msg);
+
+#if __ANDROID__
+                        var bmp = Emgu.Models.NativeImageIO.ImageFileToBitmap(images[0]);
+                        SetImage(bmp);
+#else
+                        var jpeg = Emgu.Models.NativeImageIO.ImageFileToJpeg(images[0]);
+                        SetImage(jpeg.Raw, jpeg.Width, jpeg.Height);
+#endif
+                        this.TopButton.IsEnabled = true;
+                    }
+                }
+#if !DEBUG
+                    catch (Exception excpt)
+                    {
+                        String msg = excpt.Message.Replace(System.Environment.NewLine, " ");
+                        SetMessage(msg);
+                    }
 #endif
             };
         }
 
-        private void OnButtonClicked(Object sender, EventArgs args)
+        /*
+        public override void OnButtonClicked(Object sender, EventArgs args)
         {
-            LoadImages(new string[] { "grace_hopper.jpg" });
-        }
+            base.OnButtonClicked(sender, args);
 
+            if (_buttonMode == ButtonMode.WaitingModelDownload)
+            {
+                if (_model == Model.Flower)
+                {
+                    //use a retrained model to recognize followers
+                    _inceptionGraph.Init(
+                        new string[] { "optimized_graph.pb", "output_labels.txt" },
+                        "https://github.com/emgucv/models/raw/master/inception_flower_retrain/",
+                        "Placeholder",
+                        "final_result");
+                }
+                else
+                {
+                    //The original inception model
+                    _inceptionGraph.Init();
+                }
+
+            }
+            else
+            {
+                if (_model == Model.Flower)
+                {
+                    LoadImages(new string[] { "tulips.jpg" });
+                }
+                else
+                {
+                    LoadImages(new string[] { "space_shuttle.jpg" });
+                }
+
+            }
+        }*/
     }
 }

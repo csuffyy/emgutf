@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -18,17 +18,21 @@ namespace Emgu.TF
     /// </summary>
     public class Buffer : UnmanagedObject
     {
+        private bool _needDispose;
+
         /// <summary>
         /// Create a new empty buffer
         /// </summary>
         public Buffer()
         {
+            _needDispose = true;
             _ptr = TfInvoke.tfeNewBuffer();
         }
 
-        internal Buffer(IntPtr ptr)
+        internal Buffer(IntPtr ptr, bool needDispose)
         {
             _ptr = ptr;
+            _needDispose = needDispose;
         }
 
         /// <summary>
@@ -39,7 +43,7 @@ namespace Emgu.TF
         public static Buffer FromString(byte[] rawProtoBuf)
         {
             GCHandle handle = GCHandle.Alloc(rawProtoBuf, GCHandleType.Pinned);
-            Buffer buffer = new Buffer(TfInvoke.tfeNewBufferFromString(handle.AddrOfPinnedObject(), rawProtoBuf.Length));
+            Buffer buffer = new Buffer(TfInvoke.tfeNewBufferFromString(handle.AddrOfPinnedObject(), rawProtoBuf.Length), true);
             handle.Free();
             return buffer;
         }
@@ -47,7 +51,7 @@ namespace Emgu.TF
         /// <summary>
         /// Get the pointer to the unmanaged data
         /// </summary>
-        public IntPtr Data
+        public IntPtr DataPtr
         {
             get { return TfInvoke.tfeBufferGetData(_ptr); }
         }
@@ -66,9 +70,20 @@ namespace Emgu.TF
         /// <returns>A copy of the data as a Memory stream</returns>
         public MemoryStream GetMemoryStream()
         {
-            byte[] bytes = new byte[Length];
-            Marshal.Copy(Data, bytes, 0, bytes.Length);
-            return new MemoryStream(bytes);
+            return new MemoryStream(Data);
+        }
+
+        /// <summary>
+        /// Get the raw data as an array of byte.
+        /// </summary>
+        public byte[] Data
+        {
+            get
+            {
+                byte[] bytes = new byte[Length];
+                Marshal.Copy(DataPtr, bytes, 0, bytes.Length);
+                return bytes;
+            }
         }
 
         /// <summary>
@@ -77,9 +92,13 @@ namespace Emgu.TF
         protected override void DisposeObject()
         {
             if (IntPtr.Zero != _ptr)
-                TfInvoke.tfeDeleteBuffer(ref _ptr);
+            {
+                if (_needDispose)
+                    TfInvoke.tfeDeleteBuffer(ref _ptr);
+                else
+                    _ptr = IntPtr.Zero;
+            }
         }
-
     }
 
     /// <summary>

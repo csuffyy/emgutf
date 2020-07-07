@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -48,6 +48,23 @@ namespace Emgu.TF
         {
             TfInvoke.tfeSetTarget(_ptr, target);
         }
+
+        /// <summary>
+        /// Set the config in TF_SessionOptions.options.
+        /// If config was not parsed successfully as a ConfigProto, record the
+        /// error information in <paramref name="status"/>.
+        /// </summary>
+        /// <param name="proto">Config should be a serialized tensorflow.ConfigProto proto.</param>
+        /// <param name="status">The status</param>
+        public void SetConfig(byte[] proto, Status status = null)
+        {
+            using (StatusChecker checker = new StatusChecker(status))
+            {
+                GCHandle handle = GCHandle.Alloc(proto, GCHandleType.Pinned);
+                TfInvoke.tfeSetConfig(_ptr, handle.AddrOfPinnedObject(), proto.Length, checker.Status);
+                handle.Free();
+            }
+        }
     }
 
     public static partial class TfInvoke
@@ -64,5 +81,8 @@ namespace Emgu.TF
             IntPtr options,
             [MarshalAs(StringMarshalType)]
             String target);
+
+        [DllImport(ExternLibrary, CallingConvention = TfInvoke.TFCallingConvention)]
+        internal static extern void tfeSetConfig(IntPtr options, IntPtr proto, int protoLen, IntPtr status);
     }
 }

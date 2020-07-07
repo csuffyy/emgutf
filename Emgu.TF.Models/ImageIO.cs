@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -7,7 +7,9 @@ using System.Collections.Generic;
 using System.Text;
 using System.IO;
 using System.Runtime.InteropServices;
+using Emgu.Models;
 using Emgu.TF;
+
 #if UNITY_EDITOR || UNITY_IOS || UNITY_ANDROID || UNITY_STANDALONE
 using UnityEngine;
 #elif __ANDROID__
@@ -15,10 +17,16 @@ using Android.Graphics;
 #elif __IOS__
 using CoreGraphics;
 using UIKit;
+#elif __UNIFIED__
+using AppKit;
+using CoreGraphics;
 #endif
 
 namespace Emgu.TF.Models
 {
+    /// <summary>
+    /// Provide image IO functions
+    /// </summary>
     public class ImageIO
     {
         /// <summary>
@@ -27,8 +35,8 @@ namespace Emgu.TF.Models
         /// <param name="image">The image tensor. Should be a single channel or 3 channel 4-D tensor</param>
         /// <param name="scale">The tensor value will be scaled with this values first</param>
         /// <param name="inputMean">The mean value will be added back to the image after scaling is done</param>
-        /// <returns></returns>
-        public static byte[] EncodeJpeg(Tensor image, float scale = 1.0f, float inputMean = 0.0f)
+        /// <returns>The jpeg data</returns>
+        private static byte[] EncodeJpeg(Tensor image, float scale = 1.0f, float inputMean = 0.0f)
         {
             var graph = new Graph();
             Operation input = graph.Placeholder(DataType.Float);
@@ -39,7 +47,7 @@ namespace Emgu.TF.Models
             Tensor mean = new Tensor(inputMean);
             Operation meanOp = graph.Const(mean, mean.Type, opName: "mean");
             Operation added = graph.Add(scaled, meanOp);
-            Operation uintCaster = graph.Cast(added, DstT: DataType.Uint8); //cast to float
+            Operation uintCaster = graph.Cast(added, DstT: DataType.Uint8); //cast to uint
             Operation squeezed = graph.Squeeze(uintCaster, new long[] { 0 });
             Operation jpegRaw = graph.EncodeJpeg(squeezed);
             Session session = new Session(graph);
@@ -50,32 +58,116 @@ namespace Emgu.TF.Models
             return raw[0].DecodeString();
         }
 
+        public static byte[] TensorToPixel(Tensor imageTensorF, float scale = 1.0f, float mean = 0.0f, int dstChannels = 3, Status status = null)
+        {
+            int[] dim = imageTensorF.Dim;
+            if (dim[0] != 1 || dim[3] != 3)
+            {
+                throw new NotImplementedException("Only [1, height, width, 3] tensor input type is supported.");
+            }
+
+            using (StatusChecker checker = new StatusChecker(status))
+            {
+                var graph = new Graph();
+                Operation input = graph.Placeholder(imageTensorF.Type);
+
+                Operation floatCaster;
+                if (imageTensorF.Type != DataType.Float)
+                {
+                    floatCaster = graph.Cast(input, DstT: DataType.Float);
+                } else
+                {
+                    floatCaster = input;
+                }
+
+                //multiply with scale
+                Tensor scaleTensor = new Tensor(scale);
+                Operation scaleOp = graph.Const(scaleTensor, scaleTensor.Type, opName: "scale");
+                Operation scaled = graph.Mul(floatCaster, scaleOp);
+
+                //Add mean value
+                Tensor meanTensor = new Tensor(mean);
+                Operation meanOp = graph.Const(meanTensor, meanTensor.Type, opName: "mean");
+                Operation added = graph.Add(scaled, meanOp);
+
+                //cast to byte
+                Operation byteCaster = graph.Cast(added, DstT: DataType.Uint8);
+
+                //run the graph
+                using (Session session = new Session(graph))
+                {
+                    Tensor[] imageResults = session.Run(new Output[] {input}, new Tensor[] {imageTensorF},
+                        new Output[] {byteCaster});
+
+                    //get the raw data
+                    byte[] raw = imageResults[0].Flat<byte>();
+
+                    if (dstChannels == 3)
+                    {
+                        return raw;
+                    }
+                    else if (dstChannels == 4)
+                    {
+                        int pixelCount = raw.Length / 3;
+                        byte[] colors = new byte[pixelCount * 4];
+                        int idxColor = 0;
+                        int idxRaw = 0;
+                        for (int i = 0; i < pixelCount; i++)
+                        {
+                            colors[idxColor++] = raw[idxRaw++];
+                            colors[idxColor++] = raw[idxRaw++];
+                            colors[idxColor++] = raw[idxRaw++];
+                            colors[idxColor++] = (byte) 255;
+                        }
+                        return colors;
+                    }
+                    else
+                    {
+                        throw new NotImplementedException(String.Format("Output channel count of {0} is not supported",
+                            dstChannels));
+                    }
+                }
+
+            }
+        }
+
 #if UNITY_EDITOR || UNITY_IOS || UNITY_ANDROID || UNITY_STANDALONE
+
+        public static Tensor ReadTensorFromImageFile(String fileName, int inputHeight = -1, int inputWidth = -1, float inputMean = 0.0f, float scale = 1.0f, bool flipUpsideDown = false)
+        {
+            Texture2D texture = NativeImageIO.ReadTexture2DFromFile(fileName);
+            return ReadTensorFromTexture2D(texture, inputHeight, inputWidth, inputMean, scale, flipUpsideDown);
+        }
+
         public static Tensor ReadTensorFromTexture2D(
             Texture2D texture, int inputHeight = -1, int inputWidth = -1,
             float inputMean = 0.0f, float scale = 1.0f, bool flipUpsideDown = false)
         {
-        #region Get the RGBA raw data as imgOrig
+#region Get the RGBA raw data as imgOrig
             Tensor imgOrig = new Tensor(DataType.Uint8, new int[] { 1, texture.height, texture.width, 4 });
             Color32[] colors = texture.GetPixels32(); //32bit RGBA
             GCHandle colorsHandle = GCHandle.Alloc(colors, GCHandleType.Pinned);
             Emgu.TF.TfInvoke.tfeMemcpy(imgOrig.DataPointer, colorsHandle.AddrOfPinnedObject(), colors.Length * Marshal.SizeOf(typeof(Color32)));
             colorsHandle.Free();
-        #endregion
+#endregion
 
             var graph = new Graph();
             Operation input = graph.Placeholder(DataType.Uint8);
 
-        #region slice out the alpha channel
-            Tensor sliceBegin = new Tensor(new int[] {0, 0, 0, 0});
+            #region Cast to float
+            Operation floatCaster = graph.Cast(input, DstT: DataType.Float); //cast to float
+            #endregion
+
+            #region slice out the alpha channel
+            Tensor sliceBegin = new Tensor(new int[] { 0, 0, 0, 0 });
             Operation sliceBeginOp = graph.Const(sliceBegin, sliceBegin.Type, opName: "sliceBegin");
             Tensor sliceSize = new Tensor(new int[] { 1, -1, -1, 3 });
             Operation sliceSizeOp = graph.Const(sliceSize, sliceSize.Type, opName: "sliceSize");
-            Operation sliced = graph.Slice(input, sliceBeginOp, sliceSizeOp, "slice");
-        #endregion
+            Operation sliced = graph.Slice(floatCaster, sliceBeginOp, sliceSizeOp, "slice");
+            #endregion
 
+            #region crop and resize image
             Tensor boxes = new Tensor(DataType.Float, new int[] {1, 4});
-
             float[] boxCorners;
             if (flipUpsideDown)
             {
@@ -85,13 +177,12 @@ namespace Emgu.TF.Models
             {
                 boxCorners = new float[] { 0f, 0f, 1f, 1f }; //y1, x1, y2, x2    
             }
-            
             Marshal.Copy(boxCorners, 0, boxes.DataPointer, boxCorners.Length);
             Operation boxesOp = graph.Const(boxes, boxes.Type, "boxes");
+            
 
             Tensor boxIdx = new Tensor(new int[] {0});
             Operation boxIdxOp = graph.Const(boxIdx, boxIdx.Type, "boxIdx");
-
             int width, height;
             if (inputHeight > 0 || inputWidth > 0)
             {
@@ -106,12 +197,11 @@ namespace Emgu.TF.Models
             Tensor cropSize = new Tensor(new int[] {height, width });
             Operation cropSizeOp = graph.Const(cropSize, cropSize.Type, "cropSize");
             Operation resized = graph.CropAndResize(sliced, boxesOp, boxIdxOp, cropSizeOp);
-
-            Operation floatCaster = graph.Cast(resized, DstT: DataType.Float); //cast to float
+            #endregion
 
             Tensor mean = new Tensor(inputMean);
             Operation meanOp = graph.Const(mean, mean.Type, opName: "mean");
-            Operation substracted = graph.Sub(floatCaster, meanOp);
+            Operation substracted = graph.Sub(resized, meanOp);
 
             Tensor scaleTensor = new Tensor(scale);
             Operation scaleOp = graph.Const(scaleTensor, scaleTensor.Type, opName: "scale");
@@ -142,6 +232,7 @@ namespace Emgu.TF.Models
             return nTex;
         }
 
+        /*
         public static Tensor ReadTensorFromTexture2D_V0(
             Texture2D texture, int inputHeight = -1, int inputWidth = -1,
             float inputMean = 0.0f, float scale = 1.0f, bool flipUpsideDown = false)
@@ -193,37 +284,45 @@ namespace Emgu.TF.Models
             System.Runtime.InteropServices.Marshal.Copy(floatValues, 0, t.DataPointer, floatValues.Length);
 
             return t;
-        }
+        }*/
 #else
 
-        public static Tensor ReadTensorFromImageFile(String fileName, int inputHeight = -1, int inputWidth = -1, float inputMean = 0.0f, float scale = 1.0f, Status status = null)
+        public static byte[] TensorToJpeg(Tensor image, float scale = 1.0f, float mean = 0.0f, Status status = null)
+        {
+#if __ANDROID__         
+            byte[] rawPixel = TensorToPixel(image, scale, mean, 4);
+            int[] dim = image.Dim;
+            return NativeImageIO.PixelToJpeg(rawPixel, dim[2], dim[1], 4).Raw;
+#elif __IOS__
+            if (mean != 0.0)
+                throw new NotImplemenetedException("Not able to accept mean values on this platform");
+            byte[] rawPixel = TensorToPixel(image, scale, mean, 3);
+            int[] dim = image.Dim;
+            return NativeImageIO.PixelToJpeg(rawPixel, dim[2], dim[1], 3).Raw;
+#elif __UNIFIED__ //Mac OSX
+            byte[] rawPixel = TensorToPixel(image, scale, mean, 4);
+            int[] dim = image.Dim;
+            return NativeImageIO.PixelToJpeg(rawPixel, dim[2], dim[1], 4).Raw;
+#else
+            return EncodeJpeg(image, 1.0f, 0.0f);
+#endif
+        }
+
+        public static Tensor ReadTensorFromImageFile<T>(
+            String fileName, 
+            int inputHeight = -1, 
+            int inputWidth = -1, 
+            float inputMean = 0.0f, 
+            float scale = 1.0f,
+            bool flipUpSideDown = false,
+            bool swapBR = false,
+            Status status = null) where T: struct
         {
 #if __ANDROID__
-            Android.Graphics.Bitmap bmp = BitmapFactory.DecodeFile(fileName);
-
-            if (inputHeight > 0 || inputWidth >  0)
-            {
-                Bitmap resized = Bitmap.CreateScaledBitmap(bmp, inputWidth, inputHeight, false);
-                bmp.Dispose();
-                bmp = resized;
-            }
-            int[] intValues = new int[bmp.Width * bmp.Height];
-            float[] floatValues = new float[bmp.Width * bmp.Height * 3];
-            bmp.GetPixels(intValues, 0, bmp.Width, 0, 0, bmp.Width, bmp.Height);
-            for (int i = 0; i < intValues.Length; ++i)
-            {
-                int val = intValues[i];
-                floatValues[i * 3 + 0] = (((val >> 16) & 0xFF) - inputMean) * scale;
-                floatValues[i * 3 + 1] = (((val >> 8) & 0xFF) - inputMean) * scale;
-                floatValues[i * 3 + 2] = ((val & 0xFF) - inputMean) * scale;
-            }
-
-            
-            Tensor t =  new Tensor(DataType.Float, new int[] {1, bmp.Height, bmp.Width, 3});
-            System.Runtime.InteropServices.Marshal.Copy(floatValues, 0, t.DataPointer, floatValues.Length);
-            return t;
+            return NativeReadTensorFromImageFile<T>(fileName, inputHeight, inputWidth, inputMean, scale,
+                flipUpSideDown, swapBR);
 #elif __IOS__
-            UIImage image = new UIImage("surfers.jpg");
+            UIImage image = new UIImage(fileName);
 			if (inputHeight > 0 || inputWidth > 0)
 			{
                 UIImage resized = image.Scale(new CGSize(inputWidth, inputHeight));
@@ -262,49 +361,128 @@ namespace Emgu.TF.Models
 			System.Runtime.InteropServices.Marshal.Copy(floatValues, 0, t.DataPointer, floatValues.Length);
 			return t;
 #else
-            using (StatusChecker checker = new StatusChecker(status))
+            FileInfo fi = new FileInfo(fileName);
+            String extension = fi.Extension.ToLower();
+
+            //Use tensorflow to decode the following image formats
+            if ((typeof(T) == typeof(float)) 
+                &&
+                (extension.Equals(".jpeg") 
+                || extension.Equals(".jpg") 
+                || extension.Equals(".png")
+                || extension.Equals(".gif")))
             {
-                var graph = new Graph();
-                Operation input = graph.Placeholder(DataType.String);
-
-                Operation jpegDecoder = graph.DecodeJpeg(input, 3); //dimension 3
-
-                Operation floatCaster = graph.Cast(jpegDecoder, DstT: DataType.Float); //cast to float
-
-                Tensor axis = new Tensor(0);
-                Operation axisOp = graph.Const(axis, axis.Type, opName: "axis");
-                Operation dimsExpander = graph.ExpandDims(floatCaster, axisOp); //turn it to dimension [1,3]
-
-                Operation resized;
-                bool resizeRequired = (inputHeight > 0) && (inputWidth > 0);
-                if (resizeRequired)
+                //using (StatusChecker checker = new StatusChecker(status))
+                using(Graph graph = new Graph())
                 {
-                    Tensor size = new Tensor(new int[] { inputHeight, inputWidth }); // new size;
-                    Operation sizeOp = graph.Const(size, size.Type, opName: "size");
-                    resized = graph.ResizeBilinear(dimsExpander, sizeOp); //resize image
+                    Operation input = graph.Placeholder(DataType.String);
+
+                    //output dimension [height, width, 3] where 3 is the number of channels
+                    //DecodeJpeg can decode JPEG, PNG and GIF
+                    Operation jpegDecoder = graph.DecodeJpeg(input, 3); 
+
+                    Operation floatCaster = graph.Cast(jpegDecoder, DstT: DataType.Float); //cast to float
+
+                    Tensor zeroConst = new Tensor(0);
+                    Operation zeroConstOp = graph.Const(zeroConst, zeroConst.Type, opName: "zeroConstOp");
+                    Operation dimsExpander = graph.ExpandDims(floatCaster, zeroConstOp); //turn it to dimension [1, height, width, 3]
+
+                    Operation resized;
+                    bool resizeRequired = (inputHeight > 0) && (inputWidth > 0);
+                    if (resizeRequired)
+                    {
+                        Tensor size = new Tensor(new int[] { inputHeight, inputWidth }); // new size;
+                        Operation sizeOp = graph.Const(size, size.Type, opName: "size");
+                        resized = graph.ResizeBilinear(dimsExpander, sizeOp); //resize image
+                    }
+                    else
+                    {
+                        resized = dimsExpander;
+                    }
+
+                    Tensor mean = new Tensor(inputMean);
+                    Operation meanOp = graph.Const(mean, mean.Type, opName: "mean");
+                    Operation subtracted = graph.Sub(resized, meanOp);
+
+                    Tensor scaleTensor = new Tensor(scale);
+                    Operation scaleOp = graph.Const(scaleTensor, scaleTensor.Type, opName: "scale");
+                    Operation scaled = graph.Mul(subtracted, scaleOp);
+
+                    Operation swapedBR;
+                    if (swapBR)
+                    {
+                        Tensor threeConst = new Tensor(new int[]{3});
+                        Operation threeConstOp = graph.Const(threeConst, threeConst.Type, "threeConstOp");
+                        swapedBR = graph.ReverseV2(scaled, threeConstOp, "swapBR");
+                    }
+                    else
+                    {
+                        swapedBR = scaled;
+                    }
+
+                    Operation flipped;
+                    if (flipUpSideDown)
+                    {
+                        Tensor oneConst = new Tensor(new int[]{1});
+                        Operation oneConstOp = graph.Const(oneConst, oneConst.Type, "oneConstOp");
+                        flipped = graph.ReverseV2(swapedBR, oneConstOp, "flipUpSideDownOp");
+                    }
+                    else
+                    {
+                        flipped = swapedBR;
+                    }
+
+                    using (Session session = new Session(graph))
+                    {
+                        Tensor imageTensor = Tensor.FromString(File.ReadAllBytes(fileName), status);
+                        Tensor[] imageResults = session.Run(new Output[] { input }, new Tensor[] { imageTensor },
+                            new Output[] { flipped });
+                        return imageResults[0];
+                    }
+
                 }
-                else
-                {
-                    resized = dimsExpander;
-                }
-
-                Tensor mean = new Tensor(inputMean);
-                Operation meanOp = graph.Const(mean, mean.Type, opName: "mean");
-                Operation substracted = graph.Sub(resized, meanOp);
-
-                Tensor scaleTensor = new Tensor(scale);
-                Operation scaleOp = graph.Const(scaleTensor, scaleTensor.Type, opName: "scale");
-                Operation scaled = graph.Mul(substracted, scaleOp);
-
-                //Operation scaled = graph.
-                Session session = new Session(graph);
-                Tensor imageTensor = Tensor.FromString(File.ReadAllBytes(fileName), status);
-                Tensor[] imageResults = session.Run(new Output[] { input }, new Tensor[] { imageTensor },
-                    new Output[] { scaled });
-                return imageResults[0];
-
+            }
+            else
+            {
+                return NativeReadTensorFromImageFile<T>(fileName, inputHeight, inputWidth, inputMean, scale,
+                    flipUpSideDown, swapBR);
             }
 #endif
+        }
+
+        private static Tensor NativeReadTensorFromImageFile<T>(
+            String fileName,
+
+            int inputHeight = -1,
+            int inputWidth = -1,
+            float inputMean = 0.0f,
+            float scale = 1.0f,
+            bool flipUpSideDown = false,
+            bool swapBR = false,
+            Status status = null) where T : struct
+        {
+            //Use native Image handler to import the file
+            Tensor t;
+            if (typeof(T) == typeof(float))
+                t = new Tensor(DataType.Float, new int[] { 1, (int)inputHeight, (int)inputWidth, 3 });
+            else if (typeof(T) == typeof(byte))
+                t = new Tensor(DataType.Uint8, new int[] { 1, (int)inputHeight, (int)inputWidth, 3 });
+            else
+            {
+                throw new Exception(String.Format("Conversion to tensor of type {0} is not implemented", typeof(T)));
+            }
+
+            NativeImageIO.ReadImageFileToTensor<T>(
+                fileName,
+                t.DataPointer,
+                inputHeight,
+                inputWidth,
+                inputMean,
+                scale,
+                flipUpSideDown,
+                !swapBR //No swapping BR in tensorflow is the equivalent of swapping BR in Bitmap
+            );
+            return t;
         }
 #endif
     }

@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -44,7 +44,16 @@ namespace Emgu.TF
         /// </summary>
         protected override void DisposeObject()
         {
-            if (_status != null &&  (_status.StatusCode != Status.Code.Ok))
+            if (_status == null)
+                return;
+
+            if (_status.Disposed)
+            {
+                _status = null;
+                return;
+            }
+
+            if (_status.StatusCode != Status.Code.Ok)
             {
                 throw new Exception(_status.Message);
             }
@@ -52,8 +61,8 @@ namespace Emgu.TF
             if (_statusNeedDispose)
             {
                 _status.Dispose();
-                _status = null;
             }
+            _status = null;
         }
     }
 }

@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -34,5 +34,23 @@ namespace Emgu.TF
             Operation = operation;
             Index = index;
         }
+
+        /// <summary>
+        /// Get the input type of the specific input index
+        /// </summary>
+        /// <returns>The input type of the specific input index</returns>
+        public DataType InputType
+        {
+            get
+            {
+                return TfInvoke.tfeOperationInputType(Operation.Ptr, Index);
+            }
+        }
+    }
+
+    public static partial class TfInvoke
+    {
+        [DllImport(ExternLibrary, CallingConvention = TfInvoke.TFCallingConvention)]
+        internal static extern DataType tfeOperationInputType(IntPtr oper, int idx);
     }
 }

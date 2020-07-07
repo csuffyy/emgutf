@@ -2,8 +2,10 @@ REM go to the folder of the current script
 pushd %~p0
 cd ..
 cd tensorflow
-git clean -d -fx ""
+rm -rf bazel-*
+rm -rf tensorflow/contrib/cmake/build
+git clean -d -fx "."
 cd ..
 
-git clean -d -fx "" 
+git clean -d -fx "." 
 popd

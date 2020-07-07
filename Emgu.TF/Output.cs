@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -34,5 +34,65 @@ namespace Emgu.TF
             Operation = operation;
             Index = index;
         }
+
+        /// <summary>
+        /// Get the output type
+        /// </summary>
+        public DataType OutputType
+        {
+            get
+            {
+                return TfInvoke.tfeOperationOutputType(Operation.Ptr, Index);
+            }
+        }
+
+        /// <summary>
+        /// Get the number of comsumers
+        /// </summary>
+        public int NumConsumers
+        {
+            get
+            {
+                return TfInvoke.tfeOperationOutputNumConsumers(Operation.Ptr, Index);
+            }
+        }
+
+        /// <summary>
+        /// Get the consumers for this Output
+        /// </summary>
+        public Input[] Consumers
+        {
+            get
+            {
+                int numComsumers = NumConsumers;
+                IntPtr[] operations = new IntPtr[numComsumers];
+                int[] inputIdx = new int[numComsumers];
+                GCHandle opHandle = GCHandle.Alloc(operations, GCHandleType.Pinned);
+                GCHandle idxHandle = GCHandle.Alloc(inputIdx, GCHandleType.Pinned);
+                TfInvoke.tfeOperationOutputConsumers(Operation.Ptr, Index, opHandle.AddrOfPinnedObject(), idxHandle.AddrOfPinnedObject(), numComsumers);
+                opHandle.Free();
+                idxHandle.Free();
+
+                Input[] result = new Input[numComsumers];
+                for (int i = 0; i < numComsumers; i++)
+                {
+                    result[i] = new Input(new Operation(operations[i]), inputIdx[i]);
+                }
+                return result;
+            }
+        }
+    }
+
+    public static partial class TfInvoke
+    {
+
+        [DllImport(ExternLibrary, CallingConvention = TfInvoke.TFCallingConvention)]
+        internal static extern DataType tfeOperationOutputType(IntPtr oper, int idx);
+
+        [DllImport(ExternLibrary, CallingConvention = TfInvoke.TFCallingConvention)]
+        internal static extern int tfeOperationOutputNumConsumers(IntPtr oper, int idx);
+
+        [DllImport(ExternLibrary, CallingConvention = TfInvoke.TFCallingConvention)]
+        internal static extern int tfeOperationOutputConsumers(IntPtr operOut, int outIdx, IntPtr consumers, IntPtr inputIdx, int maxConsumers);
     }
 }

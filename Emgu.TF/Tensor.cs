@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -99,7 +99,19 @@ namespace Emgu.TF
         /// <summary>
         /// Resource
         /// </summary>
-        Resource = 20
+        Resource = 20,
+        /// <summary>
+        /// Variant
+        /// </summary>
+        Variant = 21,
+        /// <summary>
+        /// Uint32
+        /// </summary>
+        Uint32 = 22,
+        /// <summary>
+        /// Uint64
+        /// </summary>
+        Uint64 = 23,
     }
 
     public static partial class TfInvoke
@@ -117,8 +129,22 @@ namespace Emgu.TF
                     return typeof(float);
                 case DataType.Double:
                     return typeof(double);
+                case DataType.Int16:
+                    return typeof(Int16);
                 case DataType.Int32:
                     return typeof(int);
+                case DataType.Int64:
+                    return typeof(Int64);
+                case DataType.Uint8:
+                    return typeof(byte);
+                case DataType.Uint16:
+                    return typeof(UInt16);
+                case DataType.Uint32:
+                    return typeof(UInt32);
+                case DataType.Uint64:
+                    return typeof(UInt64);
+                case DataType.String:
+                    return typeof(Byte);
                 default:
                     return null;
             }
@@ -204,6 +230,11 @@ namespace Emgu.TF
             }
         }
 
+        /// <summary>
+        /// Decode a string encoded
+        /// </summary>
+        /// <param name="status">The status</param>
+        /// <returns>The decoded string.</returns>
         public byte[] DecodeString(Status status = null)
         {
             using (StatusChecker checker = new StatusChecker(status))
@@ -221,6 +252,16 @@ namespace Emgu.TF
         }
 
         /// <summary>
+        /// Create a Tensor that consist of a single int16 value
+        /// </summary>
+        /// <param name="value">The value</param>
+        public Tensor(Int16 value) :
+            this(DataType.Int16, sizeof(Int16))
+        {
+            Marshal.WriteInt16(DataPointer, value);
+        }
+
+        /// <summary>
         /// Create a Tensor that consist of a single int value
         /// </summary>
         /// <param name="value">The value</param>
@@ -231,6 +272,16 @@ namespace Emgu.TF
         }
 
         /// <summary>
+        /// Create a Tensor that consist of a single int64 value
+        /// </summary>
+        /// <param name="value">The value</param>
+        public Tensor(Int64 value) :
+            this(DataType.Int64, sizeof(int))
+        {
+            Marshal.WriteInt64(DataPointer, value);
+        }
+
+        /// <summary>
         /// Create a Tensor that consist of a single float value
         /// </summary>
         /// <param name="value">The value</param>
@@ -238,6 +289,16 @@ namespace Emgu.TF
             this(DataType.Float, sizeof(float))
         {
             Marshal.Copy(new float[] { value }, 0, DataPointer, 1);
+        }
+
+        /// <summary>
+        /// Create a Tensor that consist of a single float value
+        /// </summary>
+        /// <param name="value">The value</param>
+        public Tensor(double value) :
+            this(DataType.Double, sizeof(float))
+        {
+            Marshal.Copy(new double[] { value }, 0, DataPointer, 1);
         }
 
         /// <summary>
@@ -261,6 +322,16 @@ namespace Emgu.TF
         }
 
         /// <summary>
+        /// Create a Tensor that consist of an array of double value
+        /// </summary>
+        /// <param name="value">The value</param>
+        public Tensor(double[] value) :
+            this(DataType.Double, new[] { value.Length })
+        {
+            Marshal.Copy(value, 0, DataPointer, value.Length);
+        }
+
+        /// <summary>
         /// Create a Tensor that consist of an array of UInt16 value
         /// </summary>
         /// <param name="value">The value</param>
@@ -269,6 +340,30 @@ namespace Emgu.TF
         {
             GCHandle handle = GCHandle.Alloc(value, GCHandleType.Pinned);
             Emgu.TF.TfInvoke.tfeMemcpy(this.DataPointer, handle.AddrOfPinnedObject(), value.Length * sizeof(UInt16));
+            handle.Free();
+        }
+
+        /// <summary>
+        /// Create a Tensor that consist of an array of UInt32 value
+        /// </summary>
+        /// <param name="value">The value</param>
+        public Tensor(UInt32[] value) :
+            this(DataType.Uint32, new[] { value.Length })
+        {
+            GCHandle handle = GCHandle.Alloc(value, GCHandleType.Pinned);
+            Emgu.TF.TfInvoke.tfeMemcpy(this.DataPointer, handle.AddrOfPinnedObject(), value.Length * sizeof(UInt32));
+            handle.Free();
+        }
+
+        /// <summary>
+        /// Create a Tensor that consist of an array of UInt64 value
+        /// </summary>
+        /// <param name="value">The value</param>
+        public Tensor(UInt64[] value) :
+            this(DataType.Uint64, new[] { value.Length })
+        {
+            GCHandle handle = GCHandle.Alloc(value, GCHandleType.Pinned);
+            Emgu.TF.TfInvoke.tfeMemcpy(this.DataPointer, handle.AddrOfPinnedObject(), value.Length * sizeof(UInt64));
             handle.Free();
         }
 
@@ -316,9 +411,17 @@ namespace Emgu.TF
         /// <summary>
         /// Get the tensor data as a jagged array
         /// </summary>
+        public Array JaggedData
+        {
+            get { return GetData( true ); }
+        }
+
+        /// <summary>
+        /// Get the tensor data as a managed array
+        /// </summary>
         public Array Data
         {
-            get { return GetData(); }
+            get { return GetData( false ); }
         }
 
         /// <summary>
@@ -348,6 +451,20 @@ namespace Emgu.TF
             if (t == null)
                 return null;
 
+            Array array;
+            int byteSize = ByteSize;
+
+            if (jagged)
+            {
+                int[] dim = this.Dim;
+                array = Array.CreateInstance(t, dim);
+            }
+            else
+            {
+                int len = byteSize / Marshal.SizeOf(t);
+                array = Array.CreateInstance(t, len);
+            }
+            /*
             int[] dim = Dim;
             int byteSize = ByteSize;
             Array array;
@@ -366,7 +483,7 @@ namespace Emgu.TF
                 for (int i = 1; i < dim.Length; i++)
                     len *= dim[i];
                 array = Array.CreateInstance(t, len);
-            }
+            }*/
             GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
             TfInvoke.tfeMemcpy(handle.AddrOfPinnedObject(), DataPointer, byteSize);
             handle.Free();

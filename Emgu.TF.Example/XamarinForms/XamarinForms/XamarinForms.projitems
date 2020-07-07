@@ -10,18 +10,18 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="$(MSBuildThisFileDirectory)AboutPage.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Android\AndroidCameraManager.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Android\AndroidCameraPage.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Android\CameraCaptureSessionCallback.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Android\OnYuvImageAvailableListener.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Android\RefCountedAutoCloseable.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Android\YUV420Converter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)App.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)ButtonTextImagePage.xaml.cs">
-      <DependentUpon>ButtonTextImagePage.xaml</DependentUpon>
-      <SubType>Code</SubType>
-    </Compile>
+    <Compile Include="$(MSBuildThisFileDirectory)ButtonTextImagePage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)InceptionPage.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ModelButtonTextImagePage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)MultiboxDetectionPage.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="$(MSBuildThisFileDirectory)ButtonTextImagePage.xaml">
-      <SubType>Designer</SubType>
-      <Generator>MSBuild:UpdateDesignTimeXaml</Generator>
-    </EmbeddedResource>
+    <Compile Include="$(MSBuildThisFileDirectory)ResnetPage.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)StylizePage.cs" />
   </ItemGroup>
 </Project>

@@ -1,5 +1,5 @@
 ﻿//----------------------------------------------------------------------------
-//  Copyright (C) 2004-2017 by EMGU Corporation. All rights reserved.       
+//  Copyright (C) 2004-2020 by EMGU Corporation. All rights reserved.       
 //----------------------------------------------------------------------------
 
 using System;
@@ -150,6 +150,38 @@ namespace Emgu.TF
         public void SetAttr(String attrName, String value)
         {
             TfInvoke.tfeSetAttrString(_ptr, attrName, value, value.Length);
+        }
+
+        /// <summary>
+        /// Set a string value as an attribute
+        /// </summary>
+        /// <param name="attrName">The attribute name</param>
+        /// <param name="value">The value</param>
+        public void SetAttr(String attrName, String[] value)
+        {
+            if (value == null)
+            {
+                TfInvoke.tfeSetAttrStringList(_ptr, attrName, IntPtr.Zero, IntPtr.Zero, 0);
+            }
+            else
+            {
+                IntPtr[] valuePtrs = new IntPtr[value.Length];
+                IntPtr[] lengths = new IntPtr[value.Length];
+                for (int i = 0; i < value.Length; i++)
+                {
+                    valuePtrs[i] = Marshal.StringToHGlobalAnsi(value[i]);
+                    lengths[i] = new IntPtr(value[i].Length);
+                }
+                GCHandle valuesHandle = GCHandle.Alloc(valuePtrs, GCHandleType.Pinned);
+                GCHandle lengthsHandle = GCHandle.Alloc(lengths, GCHandleType.Pinned);
+                TfInvoke.tfeSetAttrStringList(_ptr, attrName, valuesHandle.AddrOfPinnedObject(), lengthsHandle.AddrOfPinnedObject(), value.Length);
+                lengthsHandle.Free();
+                valuesHandle.Free();
+
+                for (int i = 0; i < valuePtrs.Length; i++)
+                    Marshal.FreeHGlobal(valuePtrs[i]);
+                
+            }
         }
 
         /// <summary>
@@ -349,6 +381,15 @@ namespace Emgu.TF
             [MarshalAs(TfInvoke.StringMarshalType)]
             String value,
             int length);
+
+        [DllImport(ExternLibrary, CallingConvention = TfInvoke.TFCallingConvention)]
+        internal static extern void tfeSetAttrStringList(
+            IntPtr desc,
+            [MarshalAs(TfInvoke.StringMarshalType)]
+            String attrName, 
+            IntPtr values, 
+            IntPtr lengths, 
+            int numValues);
 
         [DllImport(ExternLibrary, CallingConvention = TfInvoke.TFCallingConvention)]
         internal static extern void tfeSetAttrType(
